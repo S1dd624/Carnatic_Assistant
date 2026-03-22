@@ -1,0 +1,42 @@
+import torch
+from torch.utils.data import Dataset, DataLoader
+import numpy as np
+from typing import List, Dict
+
+class TrinityDataset(Dataset):
+    """
+    Fuses normalized Cents tensors with Syllabic Sahitya.
+    Optimized for CPU-bound training
+    """
+    def __init__(self, cents_data: List[np.ndarray], lyrics_data: List[List[str]], sequence_length: int = 128):
+        self.cents_data = [torch.tensor(d, dtype=torch.float32) for d in cents_data]
+        self.lyrics_data = lyrics_data # List of syllables (e.g., ['Vaa', 'ta', 'pi'])
+        self.seq_len = sequence_length
+        
+        # Mapping Sanskrit syllables to unique IDs (The "Vocabulary")
+        self.vocab = self._build_vocab(lyrics_data)
+        self.vocab_size = len(self.vocab)
+
+    def _build_vocab(self, data: List[List[str]]) -> Dict[str, int]:
+        unique_syllables = sorted(list(set([syl for sublist in data for syl in sublist])))
+        return {syl: i for i, syl in enumerate(unique_syllables)}
+
+    def __len__(self):
+        return sum([len(d) - self.seq_len for d in self.cents_data])
+
+    def __getitem__(self, idx):
+        # Implementation of sliding window across multiple recordings
+        # For brevity, assumes a single continuous recording here
+        x_pitch = self.cents_data[0][idx : idx + self.seq_len]
+        # Aligning pitch window to a symbolic 'target' Swara/Syllable
+        y_label = torch.tensor(self.vocab.get(self.lyrics_data[0][idx + self.seq_len], 0))
+        
+        return x_pitch.unsqueeze(-1), y_label
+
+@torch.jit.script
+def compute_nll_loss(logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """
+    Optimized Negative Log-Likelihood for Information Content (IC) calculation.
+    Used to quantify 'Surprisal' in the Auditor.
+    """
+    return torch.nn.functional.cross_entropy(logits, targets)
